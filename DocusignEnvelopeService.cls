@@ -3,6 +3,19 @@ public with sharing class DocusignEnvelopeService {
     private static final Integer MAX_CHECKBOX_ANCHORS = 200;
 
     /**
+     * Toegestane bestandstypen voor verzending via DocuSign. Centrale bron van
+     * waarheid; de controllers verwijzen hierheen i.p.v. een eigen lijst te
+     * onderhouden. Vergelijking gebeurt altijd lowercase.
+     *
+     * List i.p.v. Set zodat de waarde rechtstreeks in een SOQL IN-binding
+     * gebruikt kan worden vanuit de controllers.
+     */
+    public static final List<String> ALLOWED_EXTENSIONS =
+        new List<String>{ 'pdf', 'docx', 'xlsx', 'txt' };
+
+    public static final String ALLOWED_EXTENSIONS_LABEL = 'PDF, DOCX, XLSX en TXT';
+
+    /**
      * Custom exception zodat foutmeldingen in een Visualforce-context leesbaar
      * blijven. AuraHandledException levert buiten Aura/LWC vaak
      * "Script-thrown exception" op i.p.v. de echte boodschap.
@@ -10,19 +23,20 @@ public with sharing class DocusignEnvelopeService {
     public class DocusignSendException extends Exception {}
 
     /**
-     * Publieke entry point. Bouwt de envelope en verstuurt deze.
-     * De callout wordt overgeslagen tijdens tests, zodat de bouwlogica
-     * gedekt kan worden zonder DocuSign aan te roepen.
+     * Publieke entry point. Bouwt de envelope met de geselecteerde bestanden
+     * en verstuurt deze. De callout wordt overgeslagen tijdens tests, zodat
+     * de bouwlogica gedekt kan worden zonder DocuSign aan te roepen.
      *
-     * @param caseId            Case waaraan de envelope gekoppeld wordt.
-     * @param contactId         Optioneel; valt terug op Case.ContactId.
-     * @param contentVersionId  De ID van de reeds gevalideerde PDF (van de
-     *                          confirm-pagina). De service zoekt NIET zelf
-     *                          opnieuw de "nieuwste" PDF.
+     * @param caseId             Case waaraan de envelope gekoppeld wordt.
+     * @param contactId          Optioneel; valt terug op Case.ContactId.
+     * @param contentVersionIds  De IDs van de door de gebruiker geselecteerde
+     *                           en reeds gevalideerde bestanden (van de
+     *                           confirm-pagina). De service zoekt NIET zelf
+     *                           bestanden bij elkaar.
      */
-    public static void sendLatestPdfFromCase(Id caseId, Id contactId, Id contentVersionId) {
+    public static void sendFilesFromCase(Id caseId, Id contactId, List<Id> contentVersionIds) {
 
-        dfsle.Envelope envelope = buildEnvelope(caseId, contactId, contentVersionId);
+        dfsle.Envelope envelope = buildEnvelope(caseId, contactId, contentVersionIds);
 
         // Callout niet uitvoeren in testcontext; bouwlogica is wel gedekt.
         if (Test.isRunningTest()) {
@@ -37,13 +51,25 @@ public with sharing class DocusignEnvelopeService {
      * Bouwt de volledige envelope. Geen callout. Apart gehouden voor testbaarheid.
      */
     @TestVisible
-    private static dfsle.Envelope buildEnvelope(Id caseId, Id contactId, Id contentVersionId) {
+    private static dfsle.Envelope buildEnvelope(Id caseId, Id contactId, List<Id> contentVersionIds) {
 
         if (caseId == null) {
             throw new DocusignSendException('Case Id ontbreekt.');
         }
-        if (contentVersionId == null) {
-            throw new DocusignSendException('ContentVersion Id ontbreekt.');
+
+        // Dedupliceren met behoud van volgorde; null-entries overslaan.
+        List<Id> uniqueContentVersionIds = new List<Id>();
+        Set<Id> seenIds = new Set<Id>();
+        if (contentVersionIds != null) {
+            for (Id cvId : contentVersionIds) {
+                if (cvId != null && !seenIds.contains(cvId)) {
+                    seenIds.add(cvId);
+                    uniqueContentVersionIds.add(cvId);
+                }
+            }
+        }
+        if (uniqueContentVersionIds.isEmpty()) {
+            throw new DocusignSendException('Geen bestanden geselecteerd om te versturen.');
         }
 
         Case caseRecord = loadCase(caseId);
@@ -78,23 +104,44 @@ public with sharing class DocusignEnvelopeService {
             throw new DocusignSendException('Het gekozen Contact heeft geen e-mailadres.');
         }
 
-        // ----- PDF valideren (exact de Id die de gebruiker bevestigde) -----
-        ContentVersion pdfVersion = loadPdf(contentVersionId);
+        // ----- Bestanden valideren (exact de Ids die de gebruiker bevestigde) -----
+        List<ContentVersion> selectedFiles = loadFiles(uniqueContentVersionIds);
+
+        // De verplichte handtekening-anchors (\i1\, \s2\, \n2\) staan alleen
+        // in de Motrac-PDF-template. Zonder een PDF in de selectie zou dfsle
+        // luid falen met een onduidelijke foutmelding; deze check geeft een
+        // bruikbare melding aan elke aanroeper (UI én directe service-calls).
+        Boolean selectionContainsPdf = false;
+        for (ContentVersion file : selectedFiles) {
+            if (file.FileExtension != null && file.FileExtension.toLowerCase() == 'pdf') {
+                selectionContainsPdf = true;
+                break;
+            }
+        }
+        if (!selectionContainsPdf) {
+            throw new DocusignSendException(
+                'Voor de handtekening-anchors is minimaal één PDF in de selectie vereist.'
+            );
+        }
 
         // ----- E-mail teksten -----
         String caseLabel = 'Case ' + caseRecord.CaseNumber;
+        Boolean multipleDocuments = selectedFiles.size() > 1;
+        String documentWord = multipleDocuments ? 'documenten' : 'een document';
 
         String controleurSubject = 'Document ter controle in DocuSign - ' + caseLabel;
         String controleurMessage =
             'Beste ' + controleur.Name + ',\n\n' +
-            'We hebben zojuist een document ter controle klaargezet in DocuSign. Gelieve deze te controleren en af te tekenen indien akkoord.\n\n' +
+            'We hebben zojuist ' + documentWord + ' ter controle klaargezet in DocuSign. Gelieve deze te controleren en af te tekenen indien akkoord.\n\n' +
             'Mocht er iets niet kloppen, laat dit dan weten via salessupport@motrac.nl';
 
         String contactSubject = 'Officieel voorstel van Motrac - ' + caseLabel;
         String contactMessage =
             'Beste ' + signerContact.Name + ',\n\n' +
-            'Hierbij delen wij ons officiële voorstel. U kunt middels onderstaande knop het document controleren en indien deze aan uw wensen voldoet ondertekenen.\n\n' +
-            'Mocht u nog vragen hebben over dit document dan kunt u terecht bij uw contactpersoon.\n\n' +
+            'Hierbij delen wij ons officiële voorstel. U kunt middels onderstaande knop ' +
+            (multipleDocuments ? 'de documenten' : 'het document') +
+            ' controleren en indien deze aan uw wensen voldoen ondertekenen.\n\n' +
+            'Mocht u nog vragen hebben over ' + (multipleDocuments ? 'deze documenten' : 'dit document') + ' dan kunt u terecht bij uw contactpersoon.\n\n' +
             'Met vriendelijke groet,\n\n' +
             'Namens ' + controleur.Name + '\n' +
             'Motrac';
@@ -124,6 +171,8 @@ public with sharing class DocusignEnvelopeService {
 
         // RECIPIENT 2: Contact / klant (tekent na controleur)
         // Verplichte tabs (\s2\, \n2\) -> ignoreIfNotPresent = false
+        // Anchors gelden envelope-breed: DocuSign zoekt de anchor-tekst in
+        // ALLE meegestuurde documenten.
         dfsle.Tab contactSignHereTab = new dfsle.SignHereTab()
             .withScale(1.0)
             .withRequired(true)
@@ -165,19 +214,27 @@ public with sharing class DocusignEnvelopeService {
             controleurRecipient, contactRecipient
         });
 
-        // Document: GEEN AcroForm-transformatie. Checkboxen via expliciete anchors.
+        // Documenten: GEEN AcroForm-transformatie. Checkboxen via expliciete anchors.
         List<dfsle.Document> docusignDocuments = dfsle.DocumentService.getDocuments(
             ContentVersion.getSObjectType(),
-            new Set<Id>{ pdfVersion.Id }
+            new Set<Id>(uniqueContentVersionIds)
         );
         if (docusignDocuments.isEmpty()) {
-            throw new DocusignSendException('DocuSign kon geen document laden uit de gekoppelde PDF.');
+            throw new DocusignSendException('DocuSign kon geen documenten laden uit de geselecteerde bestanden.');
+        }
+        if (docusignDocuments.size() != uniqueContentVersionIds.size()) {
+            throw new DocusignSendException(
+                'DocuSign kon niet alle geselecteerde bestanden laden (' +
+                docusignDocuments.size() + ' van ' + uniqueContentVersionIds.size() +
+                '). Open het scherm opnieuw en probeer nogmaals.'
+            );
         }
 
-        envelope = envelope.withDocuments(new List<dfsle.Document>{ docusignDocuments[0] });
+        envelope = envelope.withDocuments(docusignDocuments);
         envelope = envelope.withEmail(
             'DocuSign voorstel - ' + caseLabel,
-            'Dit document wordt via DocuSign ter controle en ondertekening aangeboden.'
+            (multipleDocuments ? 'Deze documenten worden' : 'Dit document wordt') +
+            ' via DocuSign ter controle en ondertekening aangeboden.'
         );
 
         return envelope;
@@ -229,26 +286,42 @@ public with sharing class DocusignEnvelopeService {
         return contacts[0];
     }
 
-    private static ContentVersion loadPdf(Id contentVersionId) {
-        List<ContentVersion> pdfVersions = [
+    /**
+     * Laadt en valideert de geselecteerde bestanden. Elk bestand moet nog de
+     * laatste versie zijn (optimistic lock: een nieuw geüploade versie maakt
+     * het oude ContentVersion-id ongeldig), een toegestaan bestandstype hebben
+     * en inhoud bevatten. Retourneert de bestanden in de volgorde van de input.
+     */
+    private static List<ContentVersion> loadFiles(List<Id> contentVersionIds) {
+        Map<Id, ContentVersion> versionsById = new Map<Id, ContentVersion>([
             SELECT Id, Title, FileExtension, ContentDocumentId, ContentSize
             FROM ContentVersion
-            WHERE Id = :contentVersionId
+            WHERE Id IN :contentVersionIds
             AND IsLatest = true
             WITH USER_MODE
-            LIMIT 1
-        ];
-        if (pdfVersions.isEmpty()) {
-            throw new DocusignSendException('De gekozen PDF bestaat niet meer of is niet de laatste versie. Open het scherm opnieuw.');
+        ]);
+
+        Set<String> allowedExtensionsLookup = new Set<String>(ALLOWED_EXTENSIONS);
+
+        List<ContentVersion> orderedFiles = new List<ContentVersion>();
+        for (Id cvId : contentVersionIds) {
+            ContentVersion file = versionsById.get(cvId);
+            if (file == null) {
+                throw new DocusignSendException(
+                    'Eén of meer geselecteerde bestanden bestaan niet meer of zijn niet de laatste versie. Open het scherm opnieuw.'
+                );
+            }
+            if (file.FileExtension == null || !allowedExtensionsLookup.contains(file.FileExtension.toLowerCase())) {
+                throw new DocusignSendException(
+                    'Bestand "' + file.Title + '" heeft geen toegestaan bestandstype. Toegestaan: ' + ALLOWED_EXTENSIONS_LABEL + '.'
+                );
+            }
+            if (file.ContentSize == null || file.ContentSize == 0) {
+                throw new DocusignSendException('Bestand "' + file.Title + '" heeft geen inhoud.');
+            }
+            orderedFiles.add(file);
         }
-        ContentVersion pdf = pdfVersions[0];
-        if (pdf.FileExtension == null || pdf.FileExtension.toLowerCase() != 'pdf') {
-            throw new DocusignSendException('Het gekozen bestand is geen PDF.');
-        }
-        if (pdf.ContentSize == null || pdf.ContentSize == 0) {
-            throw new DocusignSendException('PDF heeft geen inhoud of ContentSize is 0.');
-        }
-        return pdf;
+        return orderedFiles;
     }
 
     @TestVisible

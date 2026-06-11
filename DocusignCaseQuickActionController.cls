@@ -1,5 +1,16 @@
 public with sharing class DocusignCaseQuickActionController {
 
+    // Toegestane bestandstypen: één bron van waarheid in de service-klasse.
+
+    public class FileInfo {
+        @AuraEnabled public Id contentVersionId;
+        @AuraEnabled public Id contentDocumentId;
+        @AuraEnabled public String title;
+        @AuraEnabled public String extension;
+        @AuraEnabled public Long fileSize;
+        @AuraEnabled public Datetime createdDate;
+    }
+
     public class PreviewResponse {
         @AuraEnabled public Id caseId;
         @AuraEnabled public String caseNumber;
@@ -15,12 +26,7 @@ public with sharing class DocusignCaseQuickActionController {
         @AuraEnabled public String controleurName;
         @AuraEnabled public String controleurEmail;
 
-        @AuraEnabled public Id contentVersionId;
-        @AuraEnabled public Id contentDocumentId;
-        @AuraEnabled public String documentTitle;
-        @AuraEnabled public String documentExtension;
-        @AuraEnabled public Long documentSize;
-        @AuraEnabled public Datetime documentCreatedDate;
+        @AuraEnabled public List<FileInfo> files;
 
         @AuraEnabled public Boolean canSend;
         @AuraEnabled public List<String> errors;
@@ -33,6 +39,7 @@ public with sharing class DocusignCaseQuickActionController {
         response.caseId = caseId;
         response.canSend = true;
         response.errors = new List<String>();
+        response.files = new List<FileInfo>();
 
         if (caseId == null) {
             response.canSend = false;
@@ -132,42 +139,39 @@ public with sharing class DocusignCaseQuickActionController {
             contentDocumentIds.add(linkedFile.ContentDocumentId);
         }
 
-        List<ContentVersion> pdfVersions = [
+        List<ContentVersion> versions = [
             SELECT Id, Title, FileExtension, ContentDocumentId, ContentSize, CreatedDate
             FROM ContentVersion
             WHERE ContentDocumentId IN :contentDocumentIds
             AND IsLatest = true
-            AND FileExtension IN ('pdf', 'PDF')
+            AND FileExtension IN :DocusignEnvelopeService.ALLOWED_EXTENSIONS
+            AND ContentSize > 0
             WITH USER_MODE
             ORDER BY CreatedDate DESC
-            LIMIT 1
         ];
 
-        if (pdfVersions.isEmpty()) {
+        if (versions.isEmpty()) {
             response.canSend = false;
-            response.errors.add('Geen PDF gevonden op deze Case. Upload eerst een PDF als Salesforce File.');
+            response.errors.add('Geen geschikte bestanden gevonden op deze Case. Toegestaan: ' + DocusignEnvelopeService.ALLOWED_EXTENSIONS_LABEL + '.');
             return response;
         }
 
-        ContentVersion pdfVersion = pdfVersions[0];
-
-        response.contentVersionId   = pdfVersion.Id;
-        response.contentDocumentId  = pdfVersion.ContentDocumentId;
-        response.documentTitle      = pdfVersion.Title;
-        response.documentExtension  = pdfVersion.FileExtension;
-        response.documentSize       = pdfVersion.ContentSize;
-        response.documentCreatedDate= pdfVersion.CreatedDate;
-
-        if (pdfVersion.ContentSize == null || pdfVersion.ContentSize == 0) {
-            response.canSend = false;
-            response.errors.add('PDF heeft geen inhoud of ContentSize is 0.');
+        for (ContentVersion version : versions) {
+            FileInfo info = new FileInfo();
+            info.contentVersionId  = version.Id;
+            info.contentDocumentId = version.ContentDocumentId;
+            info.title             = version.Title;
+            info.extension         = version.FileExtension;
+            info.fileSize          = version.ContentSize;
+            info.createdDate       = version.CreatedDate;
+            response.files.add(info);
         }
 
         return response;
     }
 
     @AuraEnabled
-    public static String sendEnvelope(Id caseId, Id contactId, Id expectedContentVersionId) {
+    public static String sendEnvelope(Id caseId, Id contactId, List<Id> contentVersionIds) {
 
         PreviewResponse preview = loadPreview(caseId);
 
@@ -175,18 +179,36 @@ public with sharing class DocusignCaseQuickActionController {
             throw new AuraHandledException(String.join(preview.errors, '\n'));
         }
 
-        if (expectedContentVersionId != null && preview.contentVersionId != expectedContentVersionId) {
+        if (contentVersionIds == null || contentVersionIds.isEmpty()) {
+            throw new AuraHandledException('Selecteer minimaal één bestand om te versturen.');
+        }
+
+        // Optimistic lock: elke geselecteerde Id moet nog in de actuele
+        // bestandslijst van de Case voorkomen (laatste versie, toegestaan type).
+        Map<Id, String> extensionByVersionId = new Map<Id, String>();
+        for (FileInfo info : preview.files) {
+            extensionByVersionId.put(info.contentVersionId, info.extension);
+        }
+        Boolean selectionContainsPdf = false;
+        for (Id selectedId : contentVersionIds) {
+            if (!extensionByVersionId.containsKey(selectedId)) {
+                throw new AuraHandledException(
+                    'Eén of meer geselecteerde bestanden zijn gewijzigd of verwijderd sinds het openen van deze modal. Sluit dit venster en probeer opnieuw.'
+                );
+            }
+            String extension = extensionByVersionId.get(selectedId);
+            if (extension != null && extension.toLowerCase() == 'pdf') {
+                selectionContainsPdf = true;
+            }
+        }
+        if (!selectionContainsPdf) {
             throw new AuraHandledException(
-                'Het laatst gekoppelde PDF-document is gewijzigd sinds het openen van deze modal. Sluit dit venster en probeer opnieuw.'
+                'Selecteer minimaal één PDF — de handtekening-anchors staan alleen in de PDF.'
             );
         }
 
-        // Geef exact de gevalideerde PDF mee (3-arg signatuur).
-        DocusignEnvelopeService.sendLatestPdfFromCase(
-            caseId,
-            contactId,
-            preview.contentVersionId
-        );
+        // Geef exact de gevalideerde selectie mee.
+        DocusignEnvelopeService.sendFilesFromCase(caseId, contactId, contentVersionIds);
 
         return 'DocuSign-envelope is verzonden.';
     }
