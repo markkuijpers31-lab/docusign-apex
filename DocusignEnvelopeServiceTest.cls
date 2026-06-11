@@ -262,6 +262,9 @@ private class DocusignEnvelopeServiceTest {
         attachFile(caseId, 'voorstel.pdf');
         attachFile(caseId, 'specificatie.docx');
         attachFile(caseId, 'prijslijst.xlsx');
+        attachFile(caseId, 'oude_prijslijst.xls'); // legacy Excel-formaat, óók toegestaan
+        attachFile(caseId, 'presentatie.pptx');
+        attachFile(caseId, 'logo.png');
         attachFile(caseId, 'leesmij.txt');
         attachFile(caseId, 'malware.exe'); // mag NIET in de lijst verschijnen
 
@@ -271,7 +274,7 @@ private class DocusignEnvelopeServiceTest {
         Test.stopTest();
 
         System.assert(!ctrl.getHasErrors(), 'Verwacht geen errors: ' + String.join(ctrl.errors, '; '));
-        System.assertEquals(4, ctrl.getFileCount(), 'Verwacht 4 toegestane bestanden (exe uitgefilterd).');
+        System.assertEquals(7, ctrl.getFileCount(), 'Verwacht 7 toegestane bestanden (exe uitgefilterd).');
         for (DocusignCaseConfirmController.FileOption option : ctrl.files) {
             System.assertEquals(false, option.selected, 'Bestanden mogen niet voorgeselecteerd zijn.');
         }
