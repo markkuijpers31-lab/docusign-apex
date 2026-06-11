@@ -1,0 +1,138 @@
+<apex:page standardController="Case"
+           extensions="DocusignCaseConfirmController"
+           showHeader="false"
+           sidebar="false"
+           lightningStylesheets="true"
+           docType="html-5.0">
+
+    <style>
+        body { font-family: Arial, sans-serif; background: #ffffff; }
+        .container { padding: 18px; }
+        .intro { margin-bottom: 16px; font-size: 14px; }
+        .box {
+            border: 1px solid #d8dde6; border-radius: 4px;
+            padding: 14px; margin-bottom: 16px; background: #ffffff;
+        }
+        .row { margin-bottom: 12px; }
+        .label {
+            font-size: 11px; text-transform: uppercase; color: #54698d;
+            font-weight: bold; margin-bottom: 3px;
+        }
+        .value { font-size: 14px; color: #080707; }
+        .warning {
+            border: 1px solid #ffb75d; background: #fff3e0;
+            padding: 12px; border-radius: 4px; margin-bottom: 16px;
+        }
+        .success {
+            border: 1px solid #45c65a; background: #e6f9ea;
+            padding: 12px; border-radius: 4px; margin-bottom: 16px;
+        }
+        .footer {
+            border-top: 1px solid #d8dde6; padding-top: 14px; text-align: right;
+        }
+        .primaryButton {
+            background: #0176d3; color: #ffffff; border: 1px solid #0176d3;
+            border-radius: 4px; padding: 8px 14px; font-weight: bold; cursor: pointer;
+        }
+        .primaryButton[disabled] {
+            background: #c9c9c9; border-color: #c9c9c9; cursor: not-allowed;
+        }
+        .secondaryButton {
+            background: #ffffff; color: #0176d3; border: 1px solid #d8dde6;
+            border-radius: 4px; padding: 8px 14px; margin-right: 8px; cursor: pointer;
+        }
+        .sendingNote { color: #54698d; font-size: 12px; margin-right: 12px; }
+        ul { margin-top: 8px; margin-bottom: 0; }
+    </style>
+
+    <script>
+        function goBackToCase() {
+            window.top.location.href = '/' + '{!caseId}';
+        }
+    </script>
+
+    <apex:form id="form">
+        <div class="container">
+
+            <apex:pageMessages id="messages" />
+
+            <apex:outputPanel id="main">
+
+                <apex:outputPanel rendered="{!sent}">
+                    <div class="success">
+                        <strong>Verzonden.</strong><br/>
+                        {!successMessage}
+                    </div>
+                </apex:outputPanel>
+
+                <apex:outputPanel rendered="{!NOT(sent)}">
+
+                    <div class="intro">
+                        Controleer onderstaande gegevens voordat de envelope naar DocuSign wordt verzonden.
+                    </div>
+
+                    <div class="box">
+                        <div class="row">
+                            <div class="label">Case</div>
+                            <div class="value">Case {!caseNumber}</div>
+                        </div>
+                        <div class="row">
+                            <div class="label">Account</div>
+                            <div class="value">{!accountLabel}</div>
+                        </div>
+                        <div class="row">
+                            <div class="label">Contact</div>
+                            <div class="value">{!contactLabel}</div>
+                        </div>
+                        <div class="row">
+                            <div class="label">Ter controle van</div>
+                            <div class="value">{!controleurLabel}</div>
+                        </div>
+                        <div class="row">
+                            <div class="label">Document</div>
+                            <div class="value">{!documentLabel}</div>
+                        </div>
+                    </div>
+
+                    <apex:outputPanel rendered="{!hasErrors}">
+                        <div class="warning">
+                            <strong>Versturen is nog niet mogelijk.</strong>
+                            <ul>
+                                <apex:repeat value="{!errors}" var="errorText">
+                                    <li>{!errorText}</li>
+                                </apex:repeat>
+                            </ul>
+                        </div>
+                    </apex:outputPanel>
+
+                </apex:outputPanel>
+
+                <div class="footer">
+
+                    <!-- Disable de knop zodra het request start (double-submit guard). -->
+                    <apex:actionStatus id="sendStatus"
+                        onstart="var b=document.getElementById('{!$Component.form.sendBtn}'); if(b){b.disabled=true;}"
+                        onstop="">
+                        <apex:facet name="start">
+                            <span class="sendingNote">Bezig met verzenden...</span>
+                        </apex:facet>
+                    </apex:actionStatus>
+
+                    <input type="button"
+                           value="Terug naar Case"
+                           class="secondaryButton"
+                           onclick="goBackToCase();" />
+
+                    <apex:commandButton id="sendBtn"
+                                        value="Versturen via DocuSign"
+                                        action="{!sendEnvelope}"
+                                        rerender="form"
+                                        status="sendStatus"
+                                        disabled="{!disableSend}"
+                                        styleClass="primaryButton" />
+                </div>
+
+            </apex:outputPanel>
+        </div>
+    </apex:form>
+</apex:page>
