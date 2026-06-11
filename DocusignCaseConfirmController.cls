@@ -1,11 +1,7 @@
 public with sharing class DocusignCaseConfirmController {
 
-    // Toegestane bestandstypen; moet gelijk lopen met DocusignEnvelopeService.
+    // Toegestane bestandstypen: één bron van waarheid in de service-klasse.
     // SOQL-stringvergelijking is case-insensitive, dus lowercase volstaat.
-    private static final List<String> ALLOWED_EXTENSIONS =
-        new List<String>{ 'pdf', 'docx', 'xlsx', 'md', 'txt' };
-
-    private static final String ALLOWED_EXTENSIONS_LABEL = 'PDF, DOCX, XLSX, MD en TXT';
 
     /**
      * Wrapper voor één selecteerbaar bestand op de Case. De selected-vlag
@@ -190,14 +186,14 @@ public with sharing class DocusignCaseConfirmController {
             FROM ContentVersion
             WHERE ContentDocumentId IN :contentDocumentIds
             AND IsLatest = true
-            AND FileExtension IN :ALLOWED_EXTENSIONS
+            AND FileExtension IN :DocusignEnvelopeService.ALLOWED_EXTENSIONS
             AND ContentSize > 0
             WITH USER_MODE
             ORDER BY CreatedDate DESC
         ];
 
         if (versions.isEmpty()) {
-            errors.add('Geen geschikte bestanden gevonden op deze Case. Toegestaan: ' + ALLOWED_EXTENSIONS_LABEL + '.');
+            errors.add('Geen geschikte bestanden gevonden op deze Case. Toegestaan: ' + DocusignEnvelopeService.ALLOWED_EXTENSIONS_LABEL + '.');
             return;
         }
 
@@ -265,6 +261,27 @@ public with sharing class DocusignCaseConfirmController {
             return null;
         }
 
+        // De handtekening-anchors (\i1\, \s2\, \n2\) staan alleen in de
+        // PDF-template. Zonder PDF in de selectie zou dfsle luid falen;
+        // geef hier vooraf een duidelijke melding aan de gebruiker.
+        Boolean selectionContainsPdf = false;
+        Set<Id> selectedIdSet = new Set<Id>(selectedIds);
+        for (FileOption option : files) {
+            if (selectedIdSet.contains(option.contentVersionId)
+                && option.extension != null
+                && option.extension.toLowerCase() == 'pdf') {
+                selectionContainsPdf = true;
+                break;
+            }
+        }
+        if (!selectionContainsPdf) {
+            ApexPages.addMessage(new ApexPages.Message(
+                ApexPages.Severity.ERROR,
+                'Selecteer minimaal één PDF — de handtekening-anchors staan alleen in de PDF.'
+            ));
+            return null;
+        }
+
         // Optimistic lock: zijn de geselecteerde bestanden nog actueel,
         // toegestaan en aan deze Case gekoppeld?
         if (!isSelectionStillCurrent(selectedIds)) {
@@ -305,7 +322,7 @@ public with sharing class DocusignCaseConfirmController {
             FROM ContentVersion
             WHERE Id IN :selectedIds
             AND IsLatest = true
-            AND FileExtension IN :ALLOWED_EXTENSIONS
+            AND FileExtension IN :DocusignEnvelopeService.ALLOWED_EXTENSIONS
             AND ContentSize > 0
             WITH USER_MODE
         ]);

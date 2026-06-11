@@ -196,6 +196,29 @@ private class DocusignEnvelopeServiceTest {
     }
 
     @isTest
+    static void buildEnvelope_geenPdfInSelectie_throws() {
+        Account a = new Account(Name = 'Acme');
+        insert a;
+        Contact ct = new Contact(LastName = 'Klant', Email = 'klant@example.com', AccountId = a.Id);
+        insert ct;
+        User u = makeControleur(true, true);
+        Id caseId = makeCase(ct.Id, a.Id, u.Id);
+        Id docxId = attachFile(caseId, 'specificatie.docx');
+        Id xlsxId = attachFile(caseId, 'prijslijst.xlsx');
+
+        Boolean thrown = false;
+        Test.startTest();
+        try {
+            DocusignEnvelopeService.buildEnvelope(caseId, ct.Id, new List<Id>{ docxId, xlsxId });
+        } catch (DocusignEnvelopeService.DocusignSendException e) {
+            thrown = true;
+            System.assert(e.getMessage().contains('PDF'), 'Verwacht melding over verplichte PDF.');
+        }
+        Test.stopTest();
+        System.assert(thrown, 'Verwacht exception zonder PDF in selectie.');
+    }
+
+    @isTest
     static void checkboxTabs_buildsExpectedCount() {
         Test.startTest();
         List<dfsle.Tab> tabs10 = DocusignEnvelopeService.buildCheckboxTabsForContact(10);
@@ -281,6 +304,37 @@ private class DocusignEnvelopeServiceTest {
         System.assert(selectieMeldingGevonden, 'Verwacht foutmelding over lege selectie.');
     }
 
+    @isTest
+    static void controller_sendZonderPdfInSelectie_zetError() {
+        Account a = new Account(Name = 'Acme');
+        insert a;
+        Contact ct = new Contact(LastName = 'Klant', Email = 'klant@example.com', AccountId = a.Id);
+        insert ct;
+        User u = makeControleur(true, true);
+        Id caseId = makeCase(ct.Id, a.Id, u.Id);
+        attachFile(caseId, 'specificatie.docx');
+        attachFile(caseId, 'prijslijst.xlsx');
+
+        Test.startTest();
+        ApexPages.StandardController sc = new ApexPages.StandardController(new Case(Id = caseId));
+        DocusignCaseConfirmController ctrl = new DocusignCaseConfirmController(sc);
+        // Selecteer alle bestanden — geen PDF tussen.
+        for (DocusignCaseConfirmController.FileOption option : ctrl.files) {
+            option.selected = true;
+        }
+        ctrl.sendEnvelope();
+        Test.stopTest();
+
+        System.assertEquals(false, ctrl.sent, 'Zonder PDF in selectie mag er niet verzonden worden.');
+        Boolean pdfMeldingGevonden = false;
+        for (ApexPages.Message msg : ApexPages.getMessages()) {
+            if (msg.getDetail().contains('minimaal één PDF')) {
+                pdfMeldingGevonden = true;
+            }
+        }
+        System.assert(pdfMeldingGevonden, 'Verwacht foutmelding over verplichte PDF.');
+    }
+
     // ---------------------------------------------------------------
     // Happy paths - raken dfsle. Zie LET OP bovenaan als dit faalt.
     // ---------------------------------------------------------------
@@ -295,11 +349,11 @@ private class DocusignEnvelopeServiceTest {
         Id caseId = makeCase(ct.Id, a.Id, u.Id);
         Id pdfId  = attachFile(caseId, 'voorstel.pdf');
         Id docxId = attachFile(caseId, 'specificatie.docx');
-        Id mdId   = attachFile(caseId, 'notities.md');
+        Id txtId  = attachFile(caseId, 'notities.txt');
 
         Test.startTest();
         // Via de publieke entry point; callout wordt geskipt door Test.isRunningTest().
-        DocusignEnvelopeService.sendFilesFromCase(caseId, ct.Id, new List<Id>{ pdfId, docxId, mdId });
+        DocusignEnvelopeService.sendFilesFromCase(caseId, ct.Id, new List<Id>{ pdfId, docxId, txtId });
         Test.stopTest();
         // Geen exception = pad doorlopen. Assertions op de envelope kun je toevoegen
         // door buildEnvelope() direct aan te roepen en recipients/documents te inspecteren.

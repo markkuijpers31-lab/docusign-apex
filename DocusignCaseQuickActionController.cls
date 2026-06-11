@@ -1,10 +1,6 @@
 public with sharing class DocusignCaseQuickActionController {
 
-    // Toegestane bestandstypen; moet gelijk lopen met DocusignEnvelopeService.
-    private static final List<String> ALLOWED_EXTENSIONS =
-        new List<String>{ 'pdf', 'docx', 'xlsx', 'md', 'txt' };
-
-    private static final String ALLOWED_EXTENSIONS_LABEL = 'PDF, DOCX, XLSX, MD en TXT';
+    // Toegestane bestandstypen: één bron van waarheid in de service-klasse.
 
     public class FileInfo {
         @AuraEnabled public Id contentVersionId;
@@ -148,7 +144,7 @@ public with sharing class DocusignCaseQuickActionController {
             FROM ContentVersion
             WHERE ContentDocumentId IN :contentDocumentIds
             AND IsLatest = true
-            AND FileExtension IN :ALLOWED_EXTENSIONS
+            AND FileExtension IN :DocusignEnvelopeService.ALLOWED_EXTENSIONS
             AND ContentSize > 0
             WITH USER_MODE
             ORDER BY CreatedDate DESC
@@ -156,7 +152,7 @@ public with sharing class DocusignCaseQuickActionController {
 
         if (versions.isEmpty()) {
             response.canSend = false;
-            response.errors.add('Geen geschikte bestanden gevonden op deze Case. Toegestaan: ' + ALLOWED_EXTENSIONS_LABEL + '.');
+            response.errors.add('Geen geschikte bestanden gevonden op deze Case. Toegestaan: ' + DocusignEnvelopeService.ALLOWED_EXTENSIONS_LABEL + '.');
             return response;
         }
 
@@ -189,16 +185,26 @@ public with sharing class DocusignCaseQuickActionController {
 
         // Optimistic lock: elke geselecteerde Id moet nog in de actuele
         // bestandslijst van de Case voorkomen (laatste versie, toegestaan type).
-        Set<Id> eligibleIds = new Set<Id>();
+        Map<Id, String> extensionByVersionId = new Map<Id, String>();
         for (FileInfo info : preview.files) {
-            eligibleIds.add(info.contentVersionId);
+            extensionByVersionId.put(info.contentVersionId, info.extension);
         }
+        Boolean selectionContainsPdf = false;
         for (Id selectedId : contentVersionIds) {
-            if (!eligibleIds.contains(selectedId)) {
+            if (!extensionByVersionId.containsKey(selectedId)) {
                 throw new AuraHandledException(
                     'Eén of meer geselecteerde bestanden zijn gewijzigd of verwijderd sinds het openen van deze modal. Sluit dit venster en probeer opnieuw.'
                 );
             }
+            String extension = extensionByVersionId.get(selectedId);
+            if (extension != null && extension.toLowerCase() == 'pdf') {
+                selectionContainsPdf = true;
+            }
+        }
+        if (!selectionContainsPdf) {
+            throw new AuraHandledException(
+                'Selecteer minimaal één PDF — de handtekening-anchors staan alleen in de PDF.'
+            );
         }
 
         // Geef exact de gevalideerde selectie mee.

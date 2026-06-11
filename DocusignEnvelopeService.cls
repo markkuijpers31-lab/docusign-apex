@@ -3,14 +3,17 @@ public with sharing class DocusignEnvelopeService {
     private static final Integer MAX_CHECKBOX_ANCHORS = 200;
 
     /**
-     * Toegestane bestandstypen voor verzending via DocuSign.
-     * Let op: vergelijking gebeurt altijd lowercase.
+     * Toegestane bestandstypen voor verzending via DocuSign. Centrale bron van
+     * waarheid; de controllers verwijzen hierheen i.p.v. een eigen lijst te
+     * onderhouden. Vergelijking gebeurt altijd lowercase.
+     *
+     * List i.p.v. Set zodat de waarde rechtstreeks in een SOQL IN-binding
+     * gebruikt kan worden vanuit de controllers.
      */
-    @TestVisible
-    private static final Set<String> ALLOWED_EXTENSIONS =
-        new Set<String>{ 'pdf', 'docx', 'xlsx', 'md', 'txt' };
+    public static final List<String> ALLOWED_EXTENSIONS =
+        new List<String>{ 'pdf', 'docx', 'xlsx', 'txt' };
 
-    private static final String ALLOWED_EXTENSIONS_LABEL = 'PDF, DOCX, XLSX, MD en TXT';
+    public static final String ALLOWED_EXTENSIONS_LABEL = 'PDF, DOCX, XLSX en TXT';
 
     /**
      * Custom exception zodat foutmeldingen in een Visualforce-context leesbaar
@@ -103,6 +106,23 @@ public with sharing class DocusignEnvelopeService {
 
         // ----- Bestanden valideren (exact de Ids die de gebruiker bevestigde) -----
         List<ContentVersion> selectedFiles = loadFiles(uniqueContentVersionIds);
+
+        // De verplichte handtekening-anchors (\i1\, \s2\, \n2\) staan alleen
+        // in de Motrac-PDF-template. Zonder een PDF in de selectie zou dfsle
+        // luid falen met een onduidelijke foutmelding; deze check geeft een
+        // bruikbare melding aan elke aanroeper (UI én directe service-calls).
+        Boolean selectionContainsPdf = false;
+        for (ContentVersion file : selectedFiles) {
+            if (file.FileExtension != null && file.FileExtension.toLowerCase() == 'pdf') {
+                selectionContainsPdf = true;
+                break;
+            }
+        }
+        if (!selectionContainsPdf) {
+            throw new DocusignSendException(
+                'Voor de handtekening-anchors is minimaal één PDF in de selectie vereist.'
+            );
+        }
 
         // ----- E-mail teksten -----
         String caseLabel = 'Case ' + caseRecord.CaseNumber;
@@ -281,6 +301,8 @@ public with sharing class DocusignEnvelopeService {
             WITH USER_MODE
         ]);
 
+        Set<String> allowedExtensionsLookup = new Set<String>(ALLOWED_EXTENSIONS);
+
         List<ContentVersion> orderedFiles = new List<ContentVersion>();
         for (Id cvId : contentVersionIds) {
             ContentVersion file = versionsById.get(cvId);
@@ -289,7 +311,7 @@ public with sharing class DocusignEnvelopeService {
                     'Eén of meer geselecteerde bestanden bestaan niet meer of zijn niet de laatste versie. Open het scherm opnieuw.'
                 );
             }
-            if (file.FileExtension == null || !ALLOWED_EXTENSIONS.contains(file.FileExtension.toLowerCase())) {
+            if (file.FileExtension == null || !allowedExtensionsLookup.contains(file.FileExtension.toLowerCase())) {
                 throw new DocusignSendException(
                     'Bestand "' + file.Title + '" heeft geen toegestaan bestandstype. Toegestaan: ' + ALLOWED_EXTENSIONS_LABEL + '.'
                 );

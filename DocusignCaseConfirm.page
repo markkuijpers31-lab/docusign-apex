@@ -107,7 +107,7 @@
                             <apex:outputPanel rendered="{!hasFiles}">
                                 <div class="fileHint">
                                     Vink aan welke bestanden meegestuurd moeten worden in de envelope.
-                                    Toegestaan: PDF, DOCX, XLSX, MD en TXT.
+                                    Toegestaan: PDF, DOCX, XLSX en TXT. Selecteer minimaal één PDF — de handtekening-anchors staan alleen in de PDF.
                                 </div>
                                 <table class="fileTable">
                                     <apex:repeat value="{!files}" var="fileOption">

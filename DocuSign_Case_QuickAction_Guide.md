@@ -1,6 +1,6 @@
 # DocuSign Case Quick Action — Definitieve implementatiegids
 
-Reproduceerbare opzet voor een Case-actie die een controlepagina toont (Account, Contact, controleur, plus een file browser met alle geschikte bestanden op de Case) en na bevestiging een DocuSign-envelope bouwt en verstuurt via Apex. De gebruiker selecteert met checkboxen welke bestanden meegaan in de envelope. Toegestane bestandstypen: **PDF, DOCX, XLSX, MD en TXT**. Sequential routing: controleur tekent eerst, klant daarna.
+Reproduceerbare opzet voor een Case-actie die een controlepagina toont (Account, Contact, controleur, plus een file browser met alle geschikte bestanden op de Case) en na bevestiging een DocuSign-envelope bouwt en verstuurt via Apex. De gebruiker selecteert met checkboxen welke bestanden meegaan in de envelope. Toegestane bestandstypen: **PDF, DOCX, XLSX en TXT** — de selectie moet bovendien altijd minstens één PDF bevatten omdat de handtekening-anchors alleen in de PDF-template staan. Sequential routing: controleur tekent eerst, klant daarna.
 
 > **Status van de actie.** De knop heet `Verstuur via DocuSign (auto)` maar verstuurt **niet** automatisch — er zit een verplichte controle-stap (modal) tussen. Overweeg de label te wijzigen naar bijv. `Verstuur via DocuSign (Motrac)` om verwarring bij sales support te voorkomen. De standaard DocuSign-actie (`Verstuur via Docusign`) staat hier los van en blijft beschikbaar.
 
@@ -30,7 +30,8 @@ De Aura-controller hoeft niet gedeployed te worden als je alleen de Visualforce-
 ## 2. Vereisten
 
 - **DocuSign for Salesforce (dfsle)** geïnstalleerd én een DocuSign-account gekoppeld in de org. Zonder werkende dfsle-configuratie faalt `sendEnvelope` op runtime.
-- **Toegestane bestandstypen**: PDF, DOCX, XLSX, MD en TXT (centraal vastgelegd in `DocusignEnvelopeService.ALLOWED_EXTENSIONS`; de controllers filteren op dezelfde lijst). *Let op: Markdown (`.md`) staat niet in DocuSigns officiële lijst van ondersteunde bestandsformaten — verifieer in sandbox dat DocuSign het accepteert, anders faalt de verzending luid op runtime.*
+- **Toegestane bestandstypen**: PDF, DOCX, XLSX en TXT, centraal vastgelegd in `DocusignEnvelopeService.ALLOWED_EXTENSIONS` (+ `ALLOWED_EXTENSIONS_LABEL`). Beide controllers verwijzen direct naar deze constanten — pas ze op één plek aan en alle filters/labels lopen automatisch mee.
+- **PDF verplicht in elke selectie**: de handtekening-anchors (`\i1\`, `\s2\`, `\n2\`) staan alleen in de Motrac-PDF-template. UI-, controller- en service-laag dwingen ieder af dat ten minste één geselecteerd bestand een PDF is, met een leesbare foutmelding vóór de dfsle-callout.
 - Custom veld **`Ter_controle_van__c`** op Case, type **Lookup(User)**. Dit is de controleur/verkoper (signer 1). Bewust niet Case Owner — die kan een Queue zijn.
 - Uitvoerende gebruikers hebben **toegang tot de Visualforce Page** (profiel of permission set) en de juiste **FLS** op de gebruikte velden (de SOQL draait `WITH USER_MODE`).
 
@@ -110,14 +111,15 @@ Maak/open een Case die volledig voldoet:
 - Account gevuld
 - Contact gevuld + e-mailadres
 - `Ter_controle_van__c` = **actieve** User met e-mailadres
-- Meerdere Salesforce Files van verschillende typen (bv. een PDF met de anchors uit §3, een DOCX en een XLSX) en bij voorkeur ook één niet-toegestaan type (bv. `.png`) om het filter te verifiëren
+- Meerdere Salesforce Files van verschillende typen (bv. een PDF met de anchors uit §3, een DOCX, een XLSX en een TXT) en bij voorkeur ook één niet-toegestaan type (bv. `.png` of `.md`) om het filter te verifiëren
 
 Stappen:
 1. Klik `Verstuur via DocuSign (auto)`.
-2. Modal laadt met de Case-gegevens ingevuld en een bestandslijst met checkboxen; alleen toegestane typen (PDF, DOCX, XLSX, MD, TXT) zijn zichtbaar, **geen** rode waarschuwing.
+2. Modal laadt met de Case-gegevens ingevuld en een bestandslijst met checkboxen; alleen toegestane typen (PDF, DOCX, XLSX, TXT) zijn zichtbaar, **geen** rode waarschuwing.
 3. Klik **Versturen via DocuSign** zonder selectie → foutmelding "Selecteer minimaal één bestand".
-4. Vink twee of meer bestanden aan en klik opnieuw → groene "Verzonden"-melding.
-5. Controleer in DocuSign: alle geselecteerde documenten zitten in de envelope, controleur = signer 1 (routing 1), contact = signer 2 (routing 2), tabs op de juiste anchors.
+4. Vink alléén niet-PDF-bestanden aan (bv. DOCX + XLSX) en klik versturen → foutmelding "Selecteer minimaal één PDF …".
+5. Voeg de PDF toe aan de selectie → versturen → groene "Verzonden"-melding.
+6. Controleer in DocuSign: alle geselecteerde documenten zitten in de envelope, controleur = signer 1 (routing 1), contact = signer 2 (routing 2), tabs op de juiste anchors.
 
 Negatieve check (belangrijk na deploy): verstuur bewust een selectie **zonder** `\s2\` in enig document. Verwacht: een **luide fout**, geen lege/incomplete envelope.
 
@@ -131,8 +133,8 @@ Negatieve check (belangrijk na deploy): verstuur bewust een selectie **zonder** 
 | **`WITH USER_MODE` strictheid** | Kan op de `User`-query streng zijn als de uitvoerende gebruiker beperkte FLS heeft. Test met een echt sales-profiel, niet alleen als admin. Valt het tegen: per query terugvallen op `WITH SECURITY_ENFORCED`. |
 | **Double-submit** | `actionStatus.onstart` disablet de knop + `if (sent) return;` in de controller. Dekt normale gevallen, is niet wiskundig waterdicht: twee snelle posts dragen dezelfde view state. Een server-side flag kan niet (DML vóór callout is verboden — `sendEnvelope` is een callout). Voor dit volume voldoende. |
 | **Twee verzendroutes** | De standaard DocuSign-actie en deze custom actie staan naast elkaar. Bewust; communiceer richting sales support welke wanneer gebruikt wordt. |
-| **Bestandsselectie** | De gebruiker kiest expliciet via checkboxen welke bestanden meegaan; de controller geeft exact die ContentVersion-ids door aan de service. Optimistic lock: bij versturen wordt per bestand gecontroleerd of het nog de laatste versie is, een toegestaan type heeft en nog aan de Case gekoppeld is — anders een luide fout. |
-| **Bestandstypen** | PDF, DOCX, XLSX, MD, TXT. Eén lijst in de service (`ALLOWED_EXTENSIONS`) en dezelfde lijst in beide controllers; houd ze synchroon bij wijzigingen. `.md` is mogelijk niet door DocuSign ondersteund (zie §2). |
+| **Bestandsselectie** | De gebruiker kiest expliciet via checkboxen welke bestanden meegaan; de controller geeft exact die ContentVersion-ids door aan de service. Optimistic lock: bij versturen wordt per bestand gecontroleerd of het nog de laatste versie is, een toegestaan type heeft en nog aan de Case gekoppeld is — anders een luide fout. Selectie moet minstens één PDF bevatten; UI-, controller- en service-laag dwingen dit ieder af. |
+| **Bestandstypen** | PDF, DOCX, XLSX en TXT. Eén `public static final` lijst in `DocusignEnvelopeService` (`ALLOWED_EXTENSIONS` + `ALLOWED_EXTENSIONS_LABEL`); beide controllers verwijzen daar direct naar. Wijzig op één plek; geen synchronisatie meer nodig. |
 | **`System.debug`** | De service logt alleen het envelope-id op INFO. Geen namen/e-mails meer in logs. |
 
 ---
