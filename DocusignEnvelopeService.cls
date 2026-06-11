@@ -251,7 +251,24 @@ public with sharing class DocusignEnvelopeService {
             );
         }
 
-        envelope = envelope.withDocuments(docusignDocuments);
+        // dfsle.DocumentService.getDocuments() krijgt een Set<Id> en kan in
+        // willekeurige volgorde teruggeven. DocuSign rendert documenten in de
+        // array-volgorde van de envelope, dus die volgorde bepaalt wat de
+        // klant ziet. Hier hersorteren we op de input-volgorde uit de UI
+        // (drag-and-drop in de modal).
+        Map<Id, dfsle.Document> docsBySourceId = new Map<Id, dfsle.Document>();
+        for (dfsle.Document doc : docusignDocuments) {
+            docsBySourceId.put(doc.sourceId, doc);
+        }
+        List<dfsle.Document> orderedDocs = new List<dfsle.Document>();
+        for (Id cvId : uniqueContentVersionIds) {
+            dfsle.Document doc = docsBySourceId.get(cvId);
+            if (doc != null) {
+                orderedDocs.add(doc);
+            }
+        }
+
+        envelope = envelope.withDocuments(orderedDocs);
         envelope = envelope.withEmail(
             'DocuSign voorstel - ' + caseLabel,
             (multipleDocuments ? 'Deze documenten worden' : 'Dit document wordt') +

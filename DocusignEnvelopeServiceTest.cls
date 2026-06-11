@@ -363,6 +363,77 @@ private class DocusignEnvelopeServiceTest {
     }
 
     @isTest
+    static void applyDragOrder_herschiktSelectieVolgensUiVolgorde() {
+        // 15-char Salesforce Ids; geen 18-char checksum-validatie nodig.
+        String prefix = ContentVersion.SObjectType.getDescribe().getKeyPrefix();
+        Id a = prefix + '000000000001';
+        Id b = prefix + '000000000002';
+        Id c = prefix + '000000000003';
+        Id d = prefix + '000000000004';
+
+        Test.startTest();
+        // Standaard: alle vier geselecteerd in volgorde a,b,c,d.
+        // UI sleept naar c,a,d,b (b expliciet als laatste).
+        List<Id> reordered = DocusignCaseConfirmController.applyDragOrder(
+            new List<Id>{ a, b, c, d },
+            c + ';' + a + ';' + d + ';' + b
+        );
+
+        // Lege orderedIds -> originele volgorde
+        List<Id> untouched = DocusignCaseConfirmController.applyDragOrder(
+            new List<Id>{ a, b, c }, ''
+        );
+
+        // orderedIds bevat alleen een deel van de selectie -> rest achteraan
+        List<Id> partial = DocusignCaseConfirmController.applyDragOrder(
+            new List<Id>{ a, b, c, d },
+            c + ';' + a   // b en d ontbreken; behouden originele volgorde
+        );
+
+        // orderedIds bevat ongeldige tokens en niet-geselecteerde Ids -> negeren
+        List<Id> noisy = DocusignCaseConfirmController.applyDragOrder(
+            new List<Id>{ a, b },
+            'not-an-id;' + d + ';' + b + ';;' + a
+        );
+        Test.stopTest();
+
+        System.assertEquals(new List<Id>{ c, a, d, b }, reordered, 'Drag-volgorde moet exact overgenomen worden.');
+        System.assertEquals(new List<Id>{ a, b, c }, untouched, 'Lege orderedIds: originele volgorde.');
+        System.assertEquals(new List<Id>{ c, a, b, d }, partial, 'Ontbrekende items horen achteraan in originele volgorde.');
+        System.assertEquals(new List<Id>{ b, a }, noisy, 'Ruis en niet-geselecteerde Ids moeten genegeerd worden.');
+    }
+
+    @isTest
+    static void controller_dragOrder_wordtDoorgegevenAanService() {
+        Account a = new Account(Name = 'Acme');
+        insert a;
+        Contact ct = new Contact(LastName = 'Klant', Email = 'klant@example.com', AccountId = a.Id);
+        insert ct;
+        User u = makeControleur(true, true);
+        Id caseId = makeCase(ct.Id, a.Id, u.Id);
+        Id pdfId  = attachFile(caseId, 'voorstel.pdf');
+        Id docxId = attachFile(caseId, 'specificatie.docx');
+        Id xlsxId = attachFile(caseId, 'prijslijst.xlsx');
+
+        Test.startTest();
+        ApexPages.StandardController sc = new ApexPages.StandardController(new Case(Id = caseId));
+        DocusignCaseConfirmController ctrl = new DocusignCaseConfirmController(sc);
+        for (DocusignCaseConfirmController.FileOption option : ctrl.files) {
+            option.selected = true;
+        }
+        // Sales support sleept docx eerst, dan pdf, dan xlsx.
+        ctrl.orderedIds = docxId + ';' + pdfId + ';' + xlsxId;
+        ctrl.sendEnvelope();
+        Test.stopTest();
+
+        System.assertEquals(true, ctrl.sent, 'Verwacht succesvolle verzending.');
+        System.assertEquals(3, ctrl.lastSelectionSent.size(), 'Verwacht drie items in de service-aanroep.');
+        System.assertEquals(docxId, ctrl.lastSelectionSent[0], 'Eerste positie = eerst gesleept.');
+        System.assertEquals(pdfId,  ctrl.lastSelectionSent[1], 'Tweede positie = als tweede gesleept.');
+        System.assertEquals(xlsxId, ctrl.lastSelectionSent[2], 'Derde positie = als derde gesleept.');
+    }
+
+    @isTest
     static void controller_sendMetSelectie_happyPath() {
         Account a = new Account(Name = 'Acme');
         insert a;

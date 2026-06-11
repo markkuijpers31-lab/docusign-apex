@@ -34,6 +34,7 @@ De Aura-controller hoeft niet gedeployed te worden als je alleen de Visualforce-
 - **PDF verplicht in elke selectie**: de handtekening-anchors (`\i1\`, `\s2\`, `\n2\`) staan alleen in de Motrac-PDF-template. UI-, controller- en service-laag dwingen ieder af dat ten minste één geselecteerd bestand een PDF is, met een leesbare foutmelding vóór de dfsle-callout.
 - Custom veld **`Ter_controle_van__c`** op Case, type **Lookup(User)**. Dit is de controleur/verkoper (signer 1). Bewust niet Case Owner — die kan een Queue zijn.
 - Uitvoerende gebruikers hebben **toegang tot de Visualforce Page** (profiel of permission set) en de juiste **FLS** op de gebruikte velden (de SOQL draait `WITH USER_MODE`).
+- **SortableJS** voor drag-and-drop in de modal. Default: CDN-referentie naar `cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js`. Voor orgs met strikt CSP-beleid: download Sortable.min.js, upload als Static Resource met naam **`SortableJS`**, en vervang in de page de `<apex:includeScript value="https://cdn...">`-regel door `<apex:includeScript value="{!$Resource.SortableJS}"/>`. Als de bibliotheek niet laadt, blijft de modal werkend maar zonder drag-and-drop — de checkbox-volgorde uit het scherm wordt dan gebruikt als documentvolgorde.
 
 ---
 
@@ -115,11 +116,12 @@ Maak/open een Case die volledig voldoet:
 
 Stappen:
 1. Klik `Verstuur via DocuSign (auto)`.
-2. Modal laadt met de Case-gegevens ingevuld en een bestandslijst met checkboxen; alle door DocuSign ondersteunde formaten zijn zichtbaar, het niet-ondersteunde bestand ontbreekt, **geen** rode waarschuwing.
-3. Klik **Versturen via DocuSign** zonder selectie → foutmelding "Selecteer minimaal één bestand".
-4. Vink alléén niet-PDF-bestanden aan (bv. DOCX + XLSX) en klik versturen → foutmelding "Selecteer minimaal één PDF …".
-5. Voeg de PDF toe aan de selectie → versturen → groene "Verzonden"-melding.
-6. Controleer in DocuSign: alle geselecteerde documenten zitten in de envelope, controleur = signer 1 (routing 1), contact = signer 2 (routing 2), tabs op de juiste anchors.
+2. Modal laadt met de Case-gegevens ingevuld en een bestandslijst met checkboxen plus drag-handle (≡); alle door DocuSign ondersteunde formaten zijn zichtbaar, het niet-ondersteunde bestand ontbreekt, **geen** rode waarschuwing.
+3. Sleep een DOCX naar boven de PDF, en sleep daarna de PDF terug naar de eerste positie — de greep moet zichtbaar reageren.
+4. Klik **Versturen via DocuSign** zonder selectie → foutmelding "Selecteer minimaal één bestand".
+5. Vink alléén niet-PDF-bestanden aan (bv. DOCX + XLSX) en klik versturen → foutmelding "Selecteer minimaal één PDF …".
+6. Voeg de PDF toe aan de selectie en sleep hem als laatste → versturen → groene "Verzonden"-melding.
+7. Controleer in DocuSign: alle geselecteerde documenten zitten in de envelope **in de gesleepte volgorde**, controleur = signer 1 (routing 1), contact = signer 2 (routing 2), tabs op de juiste anchors in de PDF.
 
 Negatieve check (belangrijk na deploy): verstuur bewust een selectie **zonder** `\s2\` in enig document. Verwacht: een **luide fout**, geen lege/incomplete envelope.
 
@@ -134,6 +136,7 @@ Negatieve check (belangrijk na deploy): verstuur bewust een selectie **zonder** 
 | **Double-submit** | `actionStatus.onstart` disablet de knop + `if (sent) return;` in de controller. Dekt normale gevallen, is niet wiskundig waterdicht: twee snelle posts dragen dezelfde view state. Een server-side flag kan niet (DML vóór callout is verboden — `sendEnvelope` is een callout). Voor dit volume voldoende. |
 | **Twee verzendroutes** | De standaard DocuSign-actie en deze custom actie staan naast elkaar. Bewust; communiceer richting sales support welke wanneer gebruikt wordt. |
 | **Bestandsselectie** | De gebruiker kiest expliciet via checkboxen welke bestanden meegaan; de controller geeft exact die ContentVersion-ids door aan de service. Optimistic lock: bij versturen wordt per bestand gecontroleerd of het nog de laatste versie is, een toegestaan type heeft en nog aan de Case gekoppeld is — anders een luide fout. Selectie moet minstens één PDF bevatten; UI-, controller- en service-laag dwingen dit ieder af. |
+| **Documentvolgorde** | Drag-and-drop in de modal (SortableJS) bepaalt de volgorde waarin DocuSign de documenten aan de klant toont. JS schrijft de volgorde in een verborgen `orderedIds`-veld; de controller respecteert die en de service hersorteert de `dfsle.Document`-lijst per `sourceId` voordat hij `withDocuments(...)` aanroept. Zonder JS valt het systeem terug op de checkbox-volgorde (nieuwste boven). |
 | **Bestandstypen** | Alle door DocuSign native ondersteunde formaten (Word, Excel inclusief `.xls`, PowerPoint, PDF, afbeeldingen, tekst, HTML, MSG, XPS, XML). Eén `public static final` lijst in `DocusignEnvelopeService` (`ALLOWED_EXTENSIONS` + `ALLOWED_EXTENSIONS_LABEL`); beide controllers verwijzen daar direct naar. Wijzig op één plek; geen synchronisatie meer nodig. |
 | **`System.debug`** | De service logt alleen het envelope-id op INFO. Geen namen/e-mails meer in logs. |
 

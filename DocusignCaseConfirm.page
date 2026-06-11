@@ -5,6 +5,14 @@
            lightningStylesheets="true"
            docType="html-5.0">
 
+    <!--
+      SortableJS voor drag-and-drop volgordebepaling.
+      Voor orgs met strikt CSP: upload Sortable.min.js als Static Resource
+      (naam: SortableJS) en vervang de regel hieronder door:
+          <apex:includeScript value="{!$Resource.SortableJS}"/>
+    -->
+    <apex:includeScript value="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"/>
+
     <style>
         body { font-family: Arial, sans-serif; background: #ffffff; }
         .container { padding: 18px; }
@@ -26,6 +34,13 @@
             font-size: 13px; color: #080707; vertical-align: middle;
         }
         .fileTable tr:last-child td { border-bottom: none; }
+        .fileTable tr.sortable-ghost { opacity: 0.4; background: #f3f6f9; }
+        .fileTable tr.sortable-chosen { background: #f3f6f9; }
+        .dragHandle {
+            width: 24px; text-align: center; color: #54698d;
+            font-size: 18px; line-height: 1; cursor: grab; user-select: none;
+        }
+        .dragHandle:active { cursor: grabbing; }
         .fileCheck { width: 28px; text-align: center; }
         .fileName { font-weight: bold; }
         .fileMeta { color: #54698d; white-space: nowrap; text-align: right; }
@@ -59,12 +74,58 @@
         function goBackToCase() {
             window.top.location.href = '/' + '{!caseId}';
         }
+
+        // Leest de huidige rij-volgorde uit het tbody en schrijft die naar
+        // de verborgen apex:inputHidden 'orderedIds', gescheiden door ';'.
+        function syncDocusignOrderedIds() {
+            var tbody = document.getElementById('docusignFileTableBody');
+            var hidden = document.getElementById('{!$Component.form.orderedIds}');
+            if (!tbody || !hidden) { return; }
+            var ids = [];
+            for (var i = 0; i < tbody.children.length; i++) {
+                var cvid = tbody.children[i].getAttribute('data-cvid');
+                if (cvid) { ids.push(cvid); }
+            }
+            hidden.value = ids.join(';');
+        }
+
+        // (Her)initialiseert SortableJS op het tbody. Veilig om meermaals
+        // aan te roepen: bestaande instance wordt eerst weggegooid. Roep
+        // aan na elke partial rerender van de form.
+        function initDocusignSortable() {
+            if (typeof Sortable === 'undefined') { return; }
+            var tbody = document.getElementById('docusignFileTableBody');
+            if (!tbody) { return; }
+            if (tbody.__sortable) {
+                tbody.__sortable.destroy();
+                tbody.__sortable = null;
+            }
+            tbody.__sortable = Sortable.create(tbody, {
+                handle: '.dragHandle',
+                animation: 150,
+                ghostClass: 'sortable-ghost',
+                chosenClass: 'sortable-chosen',
+                onEnd: syncDocusignOrderedIds
+            });
+            // Schrijf bij eerste init ook meteen de huidige volgorde weg,
+            // zodat de controller hem heeft zelfs als de gebruiker niet sleept.
+            syncDocusignOrderedIds();
+        }
+
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initDocusignSortable);
+        } else {
+            initDocusignSortable();
+        }
     </script>
 
     <apex:form id="form">
         <div class="container">
 
             <apex:pageMessages id="messages" />
+
+            <!-- Door SortableJS bijgewerkt; door de controller gelezen in sendEnvelope(). -->
+            <apex:inputHidden id="orderedIds" value="{!orderedIds}" />
 
             <apex:outputPanel id="main">
 
@@ -78,7 +139,7 @@
                 <apex:outputPanel rendered="{!NOT(sent)}">
 
                     <div class="intro">
-                        Controleer onderstaande gegevens en selecteer de bestanden voordat de envelope naar DocuSign wordt verzonden.
+                        Controleer onderstaande gegevens, selecteer de bestanden en sleep ze in de volgorde waarin de klant ze in DocuSign moet zien.
                     </div>
 
                     <div class="box">
@@ -106,21 +167,24 @@
 
                             <apex:outputPanel rendered="{!hasFiles}">
                                 <div class="fileHint">
-                                    Vink aan welke bestanden meegestuurd moeten worden in de envelope.
+                                    Vink aan welke bestanden meegestuurd moeten worden in de envelope, en sleep ze met de greep (≡) in de juiste volgorde.
                                     Alle door DocuSign ondersteunde formaten zijn toegestaan (Word, Excel, PowerPoint, PDF, afbeeldingen, tekst).
                                     Selecteer minimaal één PDF — de handtekening-anchors staan alleen in de PDF.
                                 </div>
                                 <table class="fileTable">
-                                    <apex:repeat value="{!files}" var="fileOption">
-                                        <tr>
-                                            <td class="fileCheck">
-                                                <apex:inputCheckbox value="{!fileOption.selected}" />
-                                            </td>
-                                            <td class="fileName">{!fileOption.label}</td>
-                                            <td class="fileMeta">{!fileOption.sizeLabel}</td>
-                                            <td class="fileMeta">{!fileOption.createdDateLabel}</td>
-                                        </tr>
-                                    </apex:repeat>
+                                    <tbody id="docusignFileTableBody">
+                                        <apex:repeat value="{!files}" var="fileOption">
+                                            <tr data-cvid="{!fileOption.contentVersionId}">
+                                                <td class="dragHandle" title="Sleep om de volgorde te wijzigen">&#8801;</td>
+                                                <td class="fileCheck">
+                                                    <apex:inputCheckbox value="{!fileOption.selected}" />
+                                                </td>
+                                                <td class="fileName">{!fileOption.label}</td>
+                                                <td class="fileMeta">{!fileOption.sizeLabel}</td>
+                                                <td class="fileMeta">{!fileOption.createdDateLabel}</td>
+                                            </tr>
+                                        </apex:repeat>
+                                    </tbody>
                                 </table>
                             </apex:outputPanel>
 
@@ -165,6 +229,7 @@
                                         rerender="form"
                                         status="sendStatus"
                                         disabled="{!disableSend}"
+                                        oncomplete="initDocusignSortable();"
                                         styleClass="primaryButton" />
                 </div>
 

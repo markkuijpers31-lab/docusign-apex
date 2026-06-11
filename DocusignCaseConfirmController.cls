@@ -55,10 +55,20 @@ public with sharing class DocusignCaseConfirmController {
 
     public List<FileOption> files { get; private set; }
 
+    // Semicolon-separated ContentVersion Ids in de door de gebruiker
+    // gesleepte volgorde. Wordt door JavaScript (SortableJS) in de modal
+    // bijgewerkt op elk drop-event. Leeg/null = val terug op de standaard
+    // CreatedDate DESC-volgorde uit loadFileOptions().
+    public String orderedIds { get; set; }
+
     public List<String> errors { get; private set; }
 
     public Boolean sent { get; private set; }
     public String successMessage { get; private set; }
+
+    // Voor tests: de volgorde waarin selectedIds naar de service is gegaan.
+    @TestVisible
+    private List<Id> lastSelectionSent;
 
     public DocusignCaseConfirmController(ApexPages.StandardController standardController) {
         this.caseId = standardController.getId();
@@ -244,6 +254,13 @@ public with sharing class DocusignCaseConfirmController {
             }
         }
 
+        // Pas de drag-and-drop-volgorde toe als de UI er één heeft doorgegeven.
+        // Items in orderedIds die niet geselecteerd zijn, worden overgeslagen.
+        // Geselecteerde items die om een vreemde reden niet in orderedIds
+        // voorkomen (bv. JS niet uitgevoerd) gaan achteraan, in hun
+        // oorspronkelijke checkbox-volgorde.
+        selectedIds = applyDragOrder(selectedIds, orderedIds);
+
         validateCaseData();
 
         if (getHasErrors()) {
@@ -294,6 +311,7 @@ public with sharing class DocusignCaseConfirmController {
 
         try {
             // Geef exact de gevalideerde selectie mee; de service zoekt niet zelf.
+            lastSelectionSent = selectedIds.clone();
             DocusignEnvelopeService.sendFilesFromCase(caseId, contactId, selectedIds);
 
             sent = true;
@@ -304,6 +322,52 @@ public with sharing class DocusignCaseConfirmController {
         }
 
         return null;
+    }
+
+    /**
+     * Herschikt de geselecteerde Ids volgens de drag-volgorde uit de UI.
+     * orderedIdsRaw is een ';'-gescheiden string ContentVersion Ids (zoals
+     * SortableJS de hidden input vult). Ongeldige tokens en niet-geselecteerde
+     * Ids worden overgeslagen. Geselecteerde Ids die niet in orderedIdsRaw
+     * voorkomen, behouden hun originele relatieve volgorde en komen achteraan.
+     */
+    @TestVisible
+    private static List<Id> applyDragOrder(List<Id> selectedIds, String orderedIdsRaw) {
+        if (String.isBlank(orderedIdsRaw) || selectedIds.isEmpty()) {
+            return selectedIds;
+        }
+
+        Set<Id> selectedSet = new Set<Id>(selectedIds);
+        Set<Id> placed = new Set<Id>();
+        List<Id> reordered = new List<Id>();
+
+        for (String token : orderedIdsRaw.split(';')) {
+            String trimmed = token == null ? '' : token.trim();
+            if (String.isBlank(trimmed)) {
+                continue;
+            }
+            Id cvId;
+            try {
+                cvId = (Id) trimmed;
+            } catch (System.StringException e) {
+                continue;
+            }
+            if (selectedSet.contains(cvId) && !placed.contains(cvId)) {
+                reordered.add(cvId);
+                placed.add(cvId);
+            }
+        }
+
+        // Eventueel geselecteerde items die de UI niet aandroeg: achteraan,
+        // in hun oorspronkelijke volgorde uit de checkbox-lijst.
+        for (Id cvId : selectedIds) {
+            if (!placed.contains(cvId)) {
+                reordered.add(cvId);
+                placed.add(cvId);
+            }
+        }
+
+        return reordered;
     }
 
     private Boolean isSelectionStillCurrent(List<Id> selectedIds) {
