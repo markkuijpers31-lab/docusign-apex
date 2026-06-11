@@ -19,6 +19,16 @@
             font-weight: bold; margin-bottom: 3px;
         }
         .value { font-size: 14px; color: #080707; }
+        .fileHint { font-size: 12px; color: #54698d; margin-bottom: 8px; }
+        .fileTable { width: 100%; border-collapse: collapse; }
+        .fileTable td {
+            padding: 6px 8px; border-bottom: 1px solid #f0f0f0;
+            font-size: 13px; color: #080707; vertical-align: middle;
+        }
+        .fileTable tr:last-child td { border-bottom: none; }
+        .fileCheck { width: 28px; text-align: center; }
+        .fileName { font-weight: bold; }
+        .fileMeta { color: #54698d; white-space: nowrap; text-align: right; }
         .warning {
             border: 1px solid #ffb75d; background: #fff3e0;
             padding: 12px; border-radius: 4px; margin-bottom: 16px;
@@ -68,7 +78,7 @@
                 <apex:outputPanel rendered="{!NOT(sent)}">
 
                     <div class="intro">
-                        Controleer onderstaande gegevens voordat de envelope naar DocuSign wordt verzonden.
+                        Controleer onderstaande gegevens en selecteer de bestanden voordat de envelope naar DocuSign wordt verzonden.
                     </div>
 
                     <div class="box">
@@ -88,9 +98,34 @@
                             <div class="label">Ter controle van</div>
                             <div class="value">{!controleurLabel}</div>
                         </div>
+                    </div>
+
+                    <div class="box">
                         <div class="row">
-                            <div class="label">Document</div>
-                            <div class="value">{!documentLabel}</div>
+                            <div class="label">Bestanden ({!fileCount})</div>
+
+                            <apex:outputPanel rendered="{!hasFiles}">
+                                <div class="fileHint">
+                                    Vink aan welke bestanden meegestuurd moeten worden in de envelope.
+                                    Toegestaan: PDF, DOCX, XLSX, MD en TXT.
+                                </div>
+                                <table class="fileTable">
+                                    <apex:repeat value="{!files}" var="fileOption">
+                                        <tr>
+                                            <td class="fileCheck">
+                                                <apex:inputCheckbox value="{!fileOption.selected}" />
+                                            </td>
+                                            <td class="fileName">{!fileOption.label}</td>
+                                            <td class="fileMeta">{!fileOption.sizeLabel}</td>
+                                            <td class="fileMeta">{!fileOption.createdDateLabel}</td>
+                                        </tr>
+                                    </apex:repeat>
+                                </table>
+                            </apex:outputPanel>
+
+                            <apex:outputPanel rendered="{!NOT(hasFiles)}">
+                                <div class="value">Geen geschikte bestanden gevonden op deze Case.</div>
+                            </apex:outputPanel>
                         </div>
                     </div>
 

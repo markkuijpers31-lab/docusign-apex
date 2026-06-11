@@ -32,7 +32,11 @@ private class DocusignEnvelopeServiceTest {
             LanguageLocaleKey = 'nl_NL',
             IsActive = active
         );
-        insert u;
+        // runAs voorkomt MIXED_DML met de niet-setup objecten (Account/Contact/Case)
+        // die in dezelfde testtransactie worden aangemaakt.
+        System.runAs(new User(Id = UserInfo.getUserId())) {
+            insert u;
+        }
         return u;
     }
 
@@ -47,11 +51,11 @@ private class DocusignEnvelopeServiceTest {
         return c.Id;
     }
 
-    private static Id attachPdf(Id caseId, String pathOnClient) {
+    private static Id attachFile(Id caseId, String pathOnClient) {
         ContentVersion cv = new ContentVersion(
-            Title = 'TestVoorstel',
+            Title = pathOnClient.substringBeforeLast('.'),
             PathOnClient = pathOnClient,            // 'test.pdf' -> FileExtension 'pdf'
-            VersionData = Blob.valueOf('PDF-CONTENT-NOT-EMPTY'),
+            VersionData = Blob.valueOf('FILE-CONTENT-NOT-EMPTY'),
             IsMajorVersion = true
         );
         insert cv;
@@ -83,6 +87,27 @@ private class DocusignEnvelopeServiceTest {
     }
 
     @isTest
+    static void buildEnvelope_geenBestanden_throws() {
+        Account a = new Account(Name = 'Acme');
+        insert a;
+        Contact ct = new Contact(LastName = 'Klant', Email = 'klant@example.com', AccountId = a.Id);
+        insert ct;
+        User u = makeControleur(true, true);
+        Id caseId = makeCase(ct.Id, a.Id, u.Id);
+
+        Boolean thrown = false;
+        Test.startTest();
+        try {
+            DocusignEnvelopeService.buildEnvelope(caseId, ct.Id, new List<Id>());
+        } catch (DocusignEnvelopeService.DocusignSendException e) {
+            thrown = true;
+            System.assert(e.getMessage().contains('Geen bestanden'), 'Verwacht melding over lege selectie.');
+        }
+        Test.stopTest();
+        System.assert(thrown, 'Verwacht exception bij lege bestandsselectie.');
+    }
+
+    @isTest
     static void buildEnvelope_geenControleur_throws() {
         Account a = new Account(Name = 'Acme');
         insert a;
@@ -90,12 +115,12 @@ private class DocusignEnvelopeServiceTest {
         insert ct;
 
         Id caseId = makeCase(ct.Id, a.Id, null); // geen controleur
-        Id cvId = attachPdf(caseId, 'test.pdf');
+        Id cvId = attachFile(caseId, 'test.pdf');
 
         Boolean thrown = false;
         Test.startTest();
         try {
-            DocusignEnvelopeService.buildEnvelope(caseId, ct.Id, cvId);
+            DocusignEnvelopeService.buildEnvelope(caseId, ct.Id, new List<Id>{ cvId });
         } catch (DocusignEnvelopeService.DocusignSendException e) {
             thrown = true;
             System.assert(e.getMessage().contains('Ter controle van'), 'Verwacht melding over controleur.');
@@ -113,12 +138,12 @@ private class DocusignEnvelopeServiceTest {
         User u = makeControleur(false, true); // inactief
 
         Id caseId = makeCase(ct.Id, a.Id, u.Id);
-        Id cvId = attachPdf(caseId, 'test.pdf');
+        Id cvId = attachFile(caseId, 'test.pdf');
 
         Boolean thrown = false;
         Test.startTest();
         try {
-            DocusignEnvelopeService.buildEnvelope(caseId, ct.Id, cvId);
+            DocusignEnvelopeService.buildEnvelope(caseId, ct.Id, new List<Id>{ cvId });
         } catch (DocusignEnvelopeService.DocusignSendException e) {
             thrown = true;
         }
@@ -127,25 +152,47 @@ private class DocusignEnvelopeServiceTest {
     }
 
     @isTest
-    static void buildEnvelope_geenPdf_throws() {
+    static void buildEnvelope_nietBestaandBestand_throws() {
         Account a = new Account(Name = 'Acme');
         insert a;
         Contact ct = new Contact(LastName = 'Klant', Email = 'klant@example.com', AccountId = a.Id);
         insert ct;
         User u = makeControleur(true, true);
         Id caseId = makeCase(ct.Id, a.Id, u.Id);
-        // geen PDF gekoppeld; geef een nep-Id mee dat niet bestaat
+        // geen bestand gekoppeld; geef een nep-Id mee dat niet bestaat
         Id fakeCvId = ContentVersion.SObjectType.getDescribe().getKeyPrefix() + '000000000000AAA';
 
         Boolean thrown = false;
         Test.startTest();
         try {
-            DocusignEnvelopeService.buildEnvelope(caseId, ct.Id, fakeCvId);
+            DocusignEnvelopeService.buildEnvelope(caseId, ct.Id, new List<Id>{ fakeCvId });
         } catch (Exception e) {
             thrown = true; // DocusignSendException of QueryException
         }
         Test.stopTest();
-        System.assert(thrown, 'Verwacht exception bij niet-bestaande PDF.');
+        System.assert(thrown, 'Verwacht exception bij niet-bestaand bestand.');
+    }
+
+    @isTest
+    static void buildEnvelope_verkeerdeExtensie_throws() {
+        Account a = new Account(Name = 'Acme');
+        insert a;
+        Contact ct = new Contact(LastName = 'Klant', Email = 'klant@example.com', AccountId = a.Id);
+        insert ct;
+        User u = makeControleur(true, true);
+        Id caseId = makeCase(ct.Id, a.Id, u.Id);
+        Id cvId = attachFile(caseId, 'test.exe'); // niet toegestaan type
+
+        Boolean thrown = false;
+        Test.startTest();
+        try {
+            DocusignEnvelopeService.buildEnvelope(caseId, ct.Id, new List<Id>{ cvId });
+        } catch (DocusignEnvelopeService.DocusignSendException e) {
+            thrown = true;
+            System.assert(e.getMessage().contains('bestandstype'), 'Verwacht melding over bestandstype.');
+        }
+        Test.stopTest();
+        System.assert(thrown, 'Verwacht exception bij niet-toegestane extensie.');
     }
 
     @isTest
@@ -159,46 +206,126 @@ private class DocusignEnvelopeServiceTest {
     }
 
     // ---------------------------------------------------------------
-    // Controller-pad - valideert errors + optimistic lock (geen dfsle)
+    // Controller-pad - valideert errors + selectie (geen dfsle)
     // ---------------------------------------------------------------
 
     @isTest
-    static void controller_geenPdf_zetError() {
+    static void controller_geenBestanden_zetError() {
         Account a = new Account(Name = 'Acme');
         insert a;
         Contact ct = new Contact(LastName = 'Klant', Email = 'klant@example.com', AccountId = a.Id);
         insert ct;
         User u = makeControleur(true, true);
-        Id caseId = makeCase(ct.Id, a.Id, u.Id); // geen PDF
+        Id caseId = makeCase(ct.Id, a.Id, u.Id); // geen bestanden
 
         Test.startTest();
         ApexPages.StandardController sc = new ApexPages.StandardController(new Case(Id = caseId));
         DocusignCaseConfirmController ctrl = new DocusignCaseConfirmController(sc);
         Test.stopTest();
 
-        System.assert(ctrl.getHasErrors(), 'Verwacht errors zonder PDF.');
+        System.assert(ctrl.getHasErrors(), 'Verwacht errors zonder bestanden.');
         System.assert(ctrl.getDisableSend(), 'Knop moet disabled zijn.');
+        System.assertEquals(0, ctrl.getFileCount(), 'Verwacht lege bestandslijst.');
     }
 
-    // ---------------------------------------------------------------
-    // Happy path - raakt dfsle. Zie LET OP bovenaan als dit faalt.
-    // ---------------------------------------------------------------
-
     @isTest
-    static void buildEnvelope_happyPath() {
+    static void controller_meerdereBestanden_geladen() {
         Account a = new Account(Name = 'Acme');
         insert a;
         Contact ct = new Contact(LastName = 'Klant', Email = 'klant@example.com', AccountId = a.Id);
         insert ct;
         User u = makeControleur(true, true);
         Id caseId = makeCase(ct.Id, a.Id, u.Id);
-        Id cvId = attachPdf(caseId, 'test.pdf');
+        attachFile(caseId, 'voorstel.pdf');
+        attachFile(caseId, 'specificatie.docx');
+        attachFile(caseId, 'prijslijst.xlsx');
+        attachFile(caseId, 'leesmij.txt');
+        attachFile(caseId, 'malware.exe'); // mag NIET in de lijst verschijnen
+
+        Test.startTest();
+        ApexPages.StandardController sc = new ApexPages.StandardController(new Case(Id = caseId));
+        DocusignCaseConfirmController ctrl = new DocusignCaseConfirmController(sc);
+        Test.stopTest();
+
+        System.assert(!ctrl.getHasErrors(), 'Verwacht geen errors: ' + String.join(ctrl.errors, '; '));
+        System.assertEquals(4, ctrl.getFileCount(), 'Verwacht 4 toegestane bestanden (exe uitgefilterd).');
+        for (DocusignCaseConfirmController.FileOption option : ctrl.files) {
+            System.assertEquals(false, option.selected, 'Bestanden mogen niet voorgeselecteerd zijn.');
+        }
+        System.assert(!ctrl.getDisableSend(), 'Knop moet enabled zijn.');
+    }
+
+    @isTest
+    static void controller_sendZonderSelectie_zetError() {
+        Account a = new Account(Name = 'Acme');
+        insert a;
+        Contact ct = new Contact(LastName = 'Klant', Email = 'klant@example.com', AccountId = a.Id);
+        insert ct;
+        User u = makeControleur(true, true);
+        Id caseId = makeCase(ct.Id, a.Id, u.Id);
+        attachFile(caseId, 'voorstel.pdf');
+
+        Test.startTest();
+        ApexPages.StandardController sc = new ApexPages.StandardController(new Case(Id = caseId));
+        DocusignCaseConfirmController ctrl = new DocusignCaseConfirmController(sc);
+        ctrl.sendEnvelope(); // niets aangevinkt
+        Test.stopTest();
+
+        System.assertEquals(false, ctrl.sent, 'Zonder selectie mag er niet verzonden worden.');
+        Boolean selectieMeldingGevonden = false;
+        for (ApexPages.Message msg : ApexPages.getMessages()) {
+            if (msg.getDetail().contains('minimaal één bestand')) {
+                selectieMeldingGevonden = true;
+            }
+        }
+        System.assert(selectieMeldingGevonden, 'Verwacht foutmelding over lege selectie.');
+    }
+
+    // ---------------------------------------------------------------
+    // Happy paths - raken dfsle. Zie LET OP bovenaan als dit faalt.
+    // ---------------------------------------------------------------
+
+    @isTest
+    static void sendFilesFromCase_meerdereBestanden_happyPath() {
+        Account a = new Account(Name = 'Acme');
+        insert a;
+        Contact ct = new Contact(LastName = 'Klant', Email = 'klant@example.com', AccountId = a.Id);
+        insert ct;
+        User u = makeControleur(true, true);
+        Id caseId = makeCase(ct.Id, a.Id, u.Id);
+        Id pdfId  = attachFile(caseId, 'voorstel.pdf');
+        Id docxId = attachFile(caseId, 'specificatie.docx');
+        Id mdId   = attachFile(caseId, 'notities.md');
 
         Test.startTest();
         // Via de publieke entry point; callout wordt geskipt door Test.isRunningTest().
-        DocusignEnvelopeService.sendLatestPdfFromCase(caseId, ct.Id, cvId);
+        DocusignEnvelopeService.sendFilesFromCase(caseId, ct.Id, new List<Id>{ pdfId, docxId, mdId });
         Test.stopTest();
         // Geen exception = pad doorlopen. Assertions op de envelope kun je toevoegen
-        // door buildEnvelope() direct aan te roepen en recipients te inspecteren.
+        // door buildEnvelope() direct aan te roepen en recipients/documents te inspecteren.
+    }
+
+    @isTest
+    static void controller_sendMetSelectie_happyPath() {
+        Account a = new Account(Name = 'Acme');
+        insert a;
+        Contact ct = new Contact(LastName = 'Klant', Email = 'klant@example.com', AccountId = a.Id);
+        insert ct;
+        User u = makeControleur(true, true);
+        Id caseId = makeCase(ct.Id, a.Id, u.Id);
+        attachFile(caseId, 'voorstel.pdf');
+        attachFile(caseId, 'specificatie.docx');
+
+        Test.startTest();
+        ApexPages.StandardController sc = new ApexPages.StandardController(new Case(Id = caseId));
+        DocusignCaseConfirmController ctrl = new DocusignCaseConfirmController(sc);
+        // Selecteer beide bestanden, zoals de gebruiker via de checkboxen doet.
+        for (DocusignCaseConfirmController.FileOption option : ctrl.files) {
+            option.selected = true;
+        }
+        ctrl.sendEnvelope();
+        Test.stopTest();
+
+        System.assertEquals(true, ctrl.sent, 'Verwacht succesvolle verzending met geselecteerde bestanden.');
     }
 }

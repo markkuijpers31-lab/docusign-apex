@@ -1,5 +1,48 @@
 public with sharing class DocusignCaseConfirmController {
 
+    // Toegestane bestandstypen; moet gelijk lopen met DocusignEnvelopeService.
+    // SOQL-stringvergelijking is case-insensitive, dus lowercase volstaat.
+    private static final List<String> ALLOWED_EXTENSIONS =
+        new List<String>{ 'pdf', 'docx', 'xlsx', 'md', 'txt' };
+
+    private static final String ALLOWED_EXTENSIONS_LABEL = 'PDF, DOCX, XLSX, MD en TXT';
+
+    /**
+     * Wrapper voor één selecteerbaar bestand op de Case. De selected-vlag
+     * is gebonden aan de checkbox op de Visualforce-pagina en reist mee
+     * in de view state.
+     */
+    public class FileOption {
+        public Boolean selected { get; set; }
+        public Id contentVersionId { get; set; }
+        public String title { get; set; }
+        public String extension { get; set; }
+        public Integer fileSize { get; set; }
+        public Datetime createdDate { get; set; }
+
+        public String getLabel() {
+            return title + '.' + extension;
+        }
+
+        public String getSizeLabel() {
+            if (fileSize == null) {
+                return '';
+            }
+            if (fileSize < 1024) {
+                return fileSize + ' B';
+            }
+            if (fileSize < 1048576) {
+                return Decimal.valueOf(fileSize).divide(1024, 0) + ' KB';
+            }
+            return Decimal.valueOf(fileSize).divide(1048576, 1) + ' MB';
+        }
+
+        public String getCreatedDateLabel() {
+            // format() rendert in de tijdzone van de ingelogde gebruiker.
+            return (createdDate == null) ? '' : createdDate.format('dd-MM-yyyy HH:mm');
+        }
+    }
+
     public Id caseId { get; private set; }
     public String caseNumber { get; private set; }
 
@@ -14,14 +57,7 @@ public with sharing class DocusignCaseConfirmController {
     public String controleurName { get; private set; }
     public String controleurEmail { get; private set; }
 
-    public Id contentVersionId { get; private set; }
-    public String documentTitle { get; private set; }
-    public String documentExtension { get; private set; }
-    public Integer documentSize { get; private set; }
-    public Datetime documentCreatedDate { get; private set; }
-
-    // Wordt bij open vastgelegd en bij send vergeleken (optimistic lock).
-    public Id expectedContentVersionId { get; set; }
+    public List<FileOption> files { get; private set; }
 
     public List<String> errors { get; private set; }
 
@@ -31,22 +67,24 @@ public with sharing class DocusignCaseConfirmController {
     public DocusignCaseConfirmController(ApexPages.StandardController standardController) {
         this.caseId = standardController.getId();
         this.errors = new List<String>();
+        this.files = new List<FileOption>();
         this.sent = false;
 
-        loadData();
-
-        this.expectedContentVersionId = this.contentVersionId;
+        validateCaseData();
+        loadFileOptions();
     }
 
-    private void loadData() {
+    /**
+     * Valideert Case, Account, Contact en controleur. Reset de errors-lijst;
+     * raakt de bestandslijst (en dus de selectie in de view state) NIET aan.
+     */
+    private void validateCaseData() {
         errors = new List<String>();
 
         caseNumber = null;
         accountId = null;  accountName = null;
         contactId = null;  contactName = null;  contactEmail = null;
         controleurId = null;  controleurName = null;  controleurEmail = null;
-        contentVersionId = null;  documentTitle = null;  documentExtension = null;
-        documentSize = null;  documentCreatedDate = null;
 
         if (caseId == null) {
             errors.add('Case Id ontbreekt.');
@@ -116,6 +154,19 @@ public with sharing class DocusignCaseConfirmController {
                 }
             }
         }
+    }
+
+    /**
+     * Laadt alle selecteerbare bestanden op de Case (toegestane extensies,
+     * laatste versie, met inhoud). Wordt alleen bij het openen van de pagina
+     * aangeroepen zodat de selectie van de gebruiker bewaard blijft.
+     */
+    private void loadFileOptions() {
+        files = new List<FileOption>();
+
+        if (caseId == null) {
+            return;
+        }
 
         List<ContentDocumentLink> linkedFiles = [
             SELECT ContentDocumentId
@@ -134,38 +185,39 @@ public with sharing class DocusignCaseConfirmController {
             contentDocumentIds.add(linkedFile.ContentDocumentId);
         }
 
-        // Casing consistent met de service: de service accepteert elke pdf via toLowerCase().
-        List<ContentVersion> pdfVersions = [
+        List<ContentVersion> versions = [
             SELECT Id, Title, FileExtension, ContentDocumentId, ContentSize, CreatedDate
             FROM ContentVersion
             WHERE ContentDocumentId IN :contentDocumentIds
             AND IsLatest = true
-            AND FileExtension IN ('pdf', 'PDF')
+            AND FileExtension IN :ALLOWED_EXTENSIONS
+            AND ContentSize > 0
             WITH USER_MODE
             ORDER BY CreatedDate DESC
-            LIMIT 1
         ];
 
-        if (pdfVersions.isEmpty()) {
-            errors.add('Geen PDF gevonden op deze Case. Upload eerst een PDF als Salesforce File.');
+        if (versions.isEmpty()) {
+            errors.add('Geen geschikte bestanden gevonden op deze Case. Toegestaan: ' + ALLOWED_EXTENSIONS_LABEL + '.');
             return;
         }
 
-        ContentVersion pdfVersion = pdfVersions[0];
-        contentVersionId    = pdfVersion.Id;
-        documentTitle       = pdfVersion.Title;
-        documentExtension   = pdfVersion.FileExtension;
-        documentSize        = pdfVersion.ContentSize;
-        documentCreatedDate = pdfVersion.CreatedDate;
-
-        if (pdfVersion.ContentSize == null || pdfVersion.ContentSize == 0) {
-            errors.add('PDF heeft geen inhoud of ContentSize is 0.');
+        for (ContentVersion version : versions) {
+            FileOption option = new FileOption();
+            option.selected         = false;
+            option.contentVersionId = version.Id;
+            option.title            = version.Title;
+            option.extension        = version.FileExtension;
+            option.fileSize         = version.ContentSize;
+            option.createdDate      = version.CreatedDate;
+            files.add(option);
         }
     }
 
-    public Boolean getCanSend()    { return !sent && errors != null && errors.isEmpty(); }
+    public Boolean getCanSend()    { return !sent && errors != null && errors.isEmpty() && !files.isEmpty(); }
     public Boolean getDisableSend(){ return !getCanSend(); }
     public Boolean getHasErrors()  { return errors != null && !errors.isEmpty(); }
+    public Boolean getHasFiles()   { return files != null && !files.isEmpty(); }
+    public Integer getFileCount()  { return (files == null) ? 0 : files.size(); }
 
     public String getAccountLabel() {
         return String.isBlank(accountName) ? 'Niet gevuld' : accountName;
@@ -181,11 +233,6 @@ public with sharing class DocusignCaseConfirmController {
         return String.isBlank(controleurEmail) ? controleurName : controleurName + ' <' + controleurEmail + '>';
     }
 
-    public String getDocumentLabel() {
-        if (String.isBlank(documentTitle)) return 'Geen PDF gevonden';
-        return documentTitle + '.' + documentExtension;
-    }
-
     public PageReference sendEnvelope() {
 
         // Guard tegen dubbele submit binnen dezelfde view state.
@@ -193,9 +240,15 @@ public with sharing class DocusignCaseConfirmController {
             return null;
         }
 
-        Id pdfIdAtModalOpen = expectedContentVersionId;
+        // Selectie eerst uitlezen; validateCaseData() raakt de lijst niet aan.
+        List<Id> selectedIds = new List<Id>();
+        for (FileOption option : files) {
+            if (option.selected == true) {
+                selectedIds.add(option.contentVersionId);
+            }
+        }
 
-        loadData();
+        validateCaseData();
 
         if (getHasErrors()) {
             for (String errorMessage : errors) {
@@ -204,18 +257,27 @@ public with sharing class DocusignCaseConfirmController {
             return null;
         }
 
-        // Optimistic lock: is de nieuwste PDF nog dezelfde als bij openen?
-        if (pdfIdAtModalOpen != null && contentVersionId != pdfIdAtModalOpen) {
+        if (selectedIds.isEmpty()) {
             ApexPages.addMessage(new ApexPages.Message(
                 ApexPages.Severity.ERROR,
-                'Het nieuwste PDF-document op deze Case is gewijzigd sinds het openen van dit scherm. Sluit dit scherm en open de actie opnieuw.'
+                'Selecteer minimaal één bestand om te versturen.'
+            ));
+            return null;
+        }
+
+        // Optimistic lock: zijn de geselecteerde bestanden nog actueel,
+        // toegestaan en aan deze Case gekoppeld?
+        if (!isSelectionStillCurrent(selectedIds)) {
+            ApexPages.addMessage(new ApexPages.Message(
+                ApexPages.Severity.ERROR,
+                'Eén of meer geselecteerde bestanden zijn gewijzigd of verwijderd sinds het openen van dit scherm. Sluit dit scherm en open de actie opnieuw.'
             ));
             return null;
         }
 
         try {
-            // Geef exact de gevalideerde PDF mee; de service zoekt niet zelf opnieuw.
-            DocusignEnvelopeService.sendLatestPdfFromCase(caseId, contactId, contentVersionId);
+            // Geef exact de gevalideerde selectie mee; de service zoekt niet zelf.
+            DocusignEnvelopeService.sendFilesFromCase(caseId, contactId, selectedIds);
 
             sent = true;
             successMessage = 'DocuSign-envelope is verzonden. Je kunt dit venster sluiten.';
@@ -225,5 +287,35 @@ public with sharing class DocusignCaseConfirmController {
         }
 
         return null;
+    }
+
+    private Boolean isSelectionStillCurrent(List<Id> selectedIds) {
+        Set<Id> linkedDocumentIds = new Set<Id>();
+        for (ContentDocumentLink linkedFile : [
+            SELECT ContentDocumentId
+            FROM ContentDocumentLink
+            WHERE LinkedEntityId = :caseId
+            WITH USER_MODE
+        ]) {
+            linkedDocumentIds.add(linkedFile.ContentDocumentId);
+        }
+
+        Map<Id, ContentVersion> currentVersions = new Map<Id, ContentVersion>([
+            SELECT Id, ContentDocumentId
+            FROM ContentVersion
+            WHERE Id IN :selectedIds
+            AND IsLatest = true
+            AND FileExtension IN :ALLOWED_EXTENSIONS
+            AND ContentSize > 0
+            WITH USER_MODE
+        ]);
+
+        for (Id selectedId : selectedIds) {
+            ContentVersion version = currentVersions.get(selectedId);
+            if (version == null || !linkedDocumentIds.contains(version.ContentDocumentId)) {
+                return false;
+            }
+        }
+        return true;
     }
 }
