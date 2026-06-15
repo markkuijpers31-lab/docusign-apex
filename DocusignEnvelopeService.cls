@@ -7,13 +7,34 @@ public with sharing class DocusignEnvelopeService {
      * waarheid; de controllers verwijzen hierheen i.p.v. een eigen lijst te
      * onderhouden. Vergelijking gebeurt altijd lowercase.
      *
+     * Deze lijst dekt de native door DocuSign ondersteunde bestandsformaten
+     * (documenten, spreadsheets, presentaties, afbeeldingen). Zie
+     * https://support.docusign.com/s/document-item?language=en_US&bundleId=pik1583277475390
+     * voor de officiële lijst.
+     *
      * List i.p.v. Set zodat de waarde rechtstreeks in een SOQL IN-binding
      * gebruikt kan worden vanuit de controllers.
      */
-    public static final List<String> ALLOWED_EXTENSIONS =
-        new List<String>{ 'pdf', 'docx', 'xlsx', 'txt' };
+    public static final List<String> ALLOWED_EXTENSIONS = new List<String>{
+        // Documenten / tekst
+        'doc', 'docm', 'docx', 'dot', 'dotm', 'dotx',
+        'pdf', 'rtf', 'txt',
+        'htm', 'html',
+        'msg',
+        'wpd', 'wps', 'wpt',
+        'xps',
+        // Spreadsheets
+        'csv', 'xls', 'xlsm', 'xlsx',
+        // Presentaties
+        'pot', 'potx', 'pps', 'ppt', 'pptm', 'pptx',
+        // Afbeeldingen
+        'bmp', 'gif', 'jpg', 'jpeg', 'png', 'tif', 'tiff',
+        // Overige
+        'xml'
+    };
 
-    public static final String ALLOWED_EXTENSIONS_LABEL = 'PDF, DOCX, XLSX en TXT';
+    public static final String ALLOWED_EXTENSIONS_LABEL =
+        'Word (DOC, DOCX), Excel (XLS, XLSX, CSV), PowerPoint (PPT, PPTX), PDF, RTF, TXT, HTML, MSG, afbeeldingen (PNG, JPG, GIF, TIFF, BMP) en XPS/XML';
 
     /**
      * Custom exception zodat foutmeldingen in een Visualforce-context leesbaar
@@ -230,7 +251,24 @@ public with sharing class DocusignEnvelopeService {
             );
         }
 
-        envelope = envelope.withDocuments(docusignDocuments);
+        // dfsle.DocumentService.getDocuments() krijgt een Set<Id> en kan in
+        // willekeurige volgorde teruggeven. DocuSign rendert documenten in de
+        // array-volgorde van de envelope, dus die volgorde bepaalt wat de
+        // klant ziet. Hier hersorteren we op de input-volgorde uit de UI
+        // (drag-and-drop in de modal).
+        Map<Id, dfsle.Document> docsBySourceId = new Map<Id, dfsle.Document>();
+        for (dfsle.Document doc : docusignDocuments) {
+            docsBySourceId.put(doc.sourceId, doc);
+        }
+        List<dfsle.Document> orderedDocs = new List<dfsle.Document>();
+        for (Id cvId : uniqueContentVersionIds) {
+            dfsle.Document doc = docsBySourceId.get(cvId);
+            if (doc != null) {
+                orderedDocs.add(doc);
+            }
+        }
+
+        envelope = envelope.withDocuments(orderedDocs);
         envelope = envelope.withEmail(
             'DocuSign voorstel - ' + caseLabel,
             (multipleDocuments ? 'Deze documenten worden' : 'Dit document wordt') +
