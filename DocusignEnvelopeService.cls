@@ -367,7 +367,7 @@ public with sharing class DocusignEnvelopeService {
                 .withName(checkboxLabel)
                 .withDataLabel(checkboxLabel)
                 .withAnchor(new dfsle.Tab.Anchor(
-                    anchor, false, false, 'right', true, true, 'pixels', -9, -4));
+                    anchor, false, false, 'right', true, true, 'pixels', -24, -1));
 
             checkboxTabs.add(checkboxTab);
         }
